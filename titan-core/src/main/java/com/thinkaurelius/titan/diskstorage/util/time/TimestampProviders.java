@@ -1,8 +1,10 @@
 package com.thinkaurelius.titan.diskstorage.util.time;
 
+import java.time.Duration;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.concurrent.TimeUnit;
 
-import com.thinkaurelius.titan.core.attribute.Duration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -15,46 +17,8 @@ import org.slf4j.LoggerFactory;
  *     <li>MILLI: milli-second time resolution</li>
  * </ul>
  */
-public enum Timestamps implements TimestampProvider {
+public enum TimestampProviders implements TimestampProvider {
     NANO {
-
-        // This is the value of System.nanoTime() at startup
-        private final long t0NanoTime;
-
-        /* This is the value of System.currentTimeMillis() at
-         * startup times a million (i.e. CTM in ns)
-         */
-        private final long t0NanosSinceEpoch;
-
-        // Initialize the t0 variables
-        {
-
-            /*
-             * This is a crude attempt to establish a correspondence
-             * between System.currentTimeMillis() and System.nanoTime().
-             *
-             * It's susceptible to errors up to +/- 999 us due to the
-             * limited accuracy of System.currentTimeMillis()
-             * versus that of System.nanoTime(), with an average
-             * error of about -0.5 ms.
-             *
-             * In addition, it's susceptible to arbitrarily large
-             * error if the scheduler decides to sleep this thread
-             * in between the following time calls.
-             *
-             * One mitigation for both errors could be to wrap
-             * this logic in a loop and combine the timing information
-             * from multiple passes into the final t0 values.
-             */
-            final long t0ms = System.currentTimeMillis();
-            final long t0ns = System.nanoTime();
-
-            t0NanosSinceEpoch = t0ms * 1000L * 1000L;
-            t0NanoTime = t0ns;
-            LoggerFactory.getLogger(Timestamps.class)
-                    .trace("Initialized nanotime. currentTimeMillis component: {} ms. nanoTime component: {} ns.",
-                            t0ms, t0ns);
-        }
 
         /**
          * This returns the approximate number of nanoseconds
@@ -69,53 +33,80 @@ public enum Timestamps implements TimestampProvider {
          * @return a timestamp as described above
          */
         @Override
-        public Timepoint getTime() {
-            return new StandardTimepoint(getTimeInternal(), NANO);
+        public Instant getTime() {
+            return Instant.now();
         }
 
         @Override
-        public TimeUnit getUnit() {
-            return TimeUnit.NANOSECONDS;
+        public Instant getTime(long sinceEpoch) {
+            return Instant.ofEpochSecond(0, sinceEpoch);
         }
 
-        private final long getTimeInternal() {
-            return System.nanoTime() - t0NanoTime + t0NanosSinceEpoch;
+        @Override
+        public ChronoUnit getUnit() {
+            return ChronoUnit.NANOS;
+        }
+
+        @Override
+        public long getTime(Instant timestamp) {
+            return timestamp.getEpochSecond() * 1000000000L + timestamp.getNano();
         }
     },
 
     MICRO {
         @Override
-        public Timepoint getTime() {
-            return new StandardTimepoint(System.currentTimeMillis() * 1000L, MICRO);
+        public Instant getTime() {
+            return Instant.now();
         }
 
         @Override
-        public TimeUnit getUnit() {
-            return TimeUnit.MICROSECONDS;
+        public Instant getTime(long sinceEpoch) {
+            return Instant.ofEpochSecond(0, (sinceEpoch * 1000L));
+        }
+
+        @Override
+        public ChronoUnit getUnit() {
+            return ChronoUnit.MICROS;
+        }
+
+        @Override
+        public long getTime(Instant timestamp) {
+            return timestamp.getEpochSecond() * 1000000L + timestamp.getNano()/1000;
+
         }
     },
 
     MILLI {
         @Override
-        public Timepoint getTime() {
-            return new StandardTimepoint(System.currentTimeMillis(), MILLI);
+        public Instant getTime() {
+            return Instant.now();
         }
 
         @Override
-        public TimeUnit getUnit() {
-            return TimeUnit.MILLISECONDS;
+        public Instant getTime(long sinceEpoch) {
+            return Instant.ofEpochMilli(sinceEpoch);
+        }
+
+        @Override
+        public ChronoUnit getUnit() {
+            return ChronoUnit.MILLIS;
+        }
+
+        @Override
+        public long getTime(Instant timestamp) {
+            return timestamp.getEpochSecond() * 1000 + timestamp.getNano() / 1000000;
         }
     };
 
     private static final Logger log =
-            LoggerFactory.getLogger(Timestamps.class);
+            LoggerFactory.getLogger(TimestampProviders.class);
 
     @Override
-    public Timepoint sleepPast(Timepoint futureTime) throws InterruptedException {
+    public Instant sleepPast(Instant futureTime) throws InterruptedException {
 
-        Timepoint now;
+        Instant now;
 
-        TimeUnit unit = getUnit();
+        ChronoUnit unit = getUnit();
 
         /*
          * Distributed storage managers that rely on timestamps play with the
@@ -130,10 +121,12 @@ public enum Timestamps implements TimestampProvider {
          * millisecond resolution (and does, in testing).
          */
         if (unit.equals(TimeUnit.MILLISECONDS))
-            futureTime = futureTime.add(new StandardDuration(1L, TimeUnit.MILLISECONDS));
+            futureTime = futureTime.plusMillis(1L);
 
         while ((now = getTime()).compareTo(futureTime) <= 0) {
-            long delta = futureTime.getTimestamp(unit) - now.getTimestamp(unit);
+
+            long delta = getTime(futureTime) - getTime(now);
+
             if (0L == delta)
                 delta = 1L;
             /*
@@ -145,7 +138,8 @@ public enum Timestamps implements TimestampProvider {
                 log.trace("Sleeping: now={} targettime={} delta={} {}",
                         new Object[] { now, futureTime, delta, unit });
             }
-            unit.sleep(delta);
+
+            Temporals.timeUnit(unit).sleep(delta);
         }
 
         return now;
@@ -153,10 +147,9 @@ public enum Timestamps implements TimestampProvider {
 
     @Override
     public void sleepFor(Duration duration) throws InterruptedException {
-        if (duration.isZeroLength()) return;
+        if (duration.isZero()) return;
 
-        TimeUnit unit = duration.getNativeUnit();
-        unit.sleep(duration.getLength(unit));
+        TimeUnit.NANOSECONDS.sleep(duration.toNanos());
     }
 
     @Override
@@ -169,8 +162,5 @@ public enum Timestamps implements TimestampProvider {
         return name();
     }
 
-    @Override
-    public Timepoint getTime(long sinceEpoch, TimeUnit unit) {
-        return new StandardTimepoint(getUnit().convert(sinceEpoch,unit),this);
-    }
+
 }
