@@ -129,11 +129,7 @@ public enum TimestampProviders implements TimestampProvider {
 
             if (0L == delta)
                 delta = 1L;
-            /*
-             * TimeUnit#sleep(long) internally preserves the nanoseconds parts
-             * of the argument, if applicable, and passes both milliseconds and
-             * nanoseconds parts into Thread#sleep(long, long)
-             */
+
             if (log.isTraceEnabled()) {
                 log.trace("Sleeping: now={} targettime={} delta={} {}",
                         new Object[] { now, futureTime, delta, unit });
