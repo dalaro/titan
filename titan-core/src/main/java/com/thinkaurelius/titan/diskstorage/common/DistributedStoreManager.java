@@ -8,11 +8,13 @@ import com.thinkaurelius.titan.diskstorage.util.time.TimestampProvider;
 import com.thinkaurelius.titan.diskstorage.configuration.Configuration;
 import com.thinkaurelius.titan.diskstorage.keycolumnvalue.StoreTransaction;
 
+import com.thinkaurelius.titan.diskstorage.util.time.TimestampProviders;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.time.temporal.TemporalUnit;
 import java.util.Random;
 import java.util.concurrent.TimeUnit;
@@ -217,7 +219,7 @@ public abstract class DistributedStoreManager extends AbstractStoreManager {
     protected void sleepAfterWrite(StoreTransaction txh, MaskedTimestamp mustPass) throws BackendException {
         assert mustPass.getDeletionTime(times) < mustPass.getAdditionTime(times);
         try {
-            times.sleepPast(mustPass.getAdditionTime());
+            times.sleepPast(mustPass.getAdditionTimeInstant(times));
         } catch (InterruptedException e) {
             throw new PermanentBackendException("Unexpected interrupt", e);
         }
@@ -245,18 +247,12 @@ public abstract class DistributedStoreManager extends AbstractStoreManager {
             return times.getTime(t)   & 0xFFFFFFFFFFFFFFFEL; // zero the LSB
         }
 
-        public Instant getDeletionTime() {
-            return t;
-        }
-
         public long getAdditionTime(TimestampProvider times) {
             return (times.getTime(t)   & 0xFFFFFFFFFFFFFFFEL) | 1L; // force the LSB to 1
         }
 
-
-
-        public Instant getAdditionTime() {
-            return t;
+        public Instant getAdditionTimeInstant(TimestampProvider times) {
+            return times.getTime(getAdditionTime(times));
         }
     }
 }
